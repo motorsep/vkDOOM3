@@ -72,8 +72,8 @@ static const char * g_instanceExtensions[ g_numInstanceExtensions ] = {
 };
 
 static const int g_numDebugInstanceExtensions = 1;
-static const char * g_debugInstanceExtensions[ g_numDebugInstanceExtensions ] = {
-	VK_EXT_DEBUG_REPORT_EXTENSION_NAME
+static const char* g_debugInstanceExtensions[g_numDebugInstanceExtensions] = {
+	VK_EXT_DEBUG_UTILS_EXTENSION_NAME
 };
 
 static const int g_numDeviceExtensions = 1;
@@ -82,8 +82,8 @@ static const char * g_deviceExtensions[ g_numDeviceExtensions ] = {
 };
 
 static const int g_numValidationLayers = 1;
-static const char * g_validationLayers[ g_numValidationLayers ] = {
-	"VK_LAYER_LUNARG_standard_validation"
+static const char* g_validationLayers[g_numValidationLayers] = {
+	"VK_LAYER_KHRONOS_validation"
 };
 
 gfxImpParms_t R_GetModeParms();
@@ -121,8 +121,6 @@ const char * VK_ErrorToString( VkResult result ) {
 		ID_VK_ERROR_STRING( VK_ERROR_INCOMPATIBLE_DISPLAY_KHR );
 		ID_VK_ERROR_STRING( VK_ERROR_VALIDATION_FAILED_EXT );
 		ID_VK_ERROR_STRING( VK_ERROR_INVALID_SHADER_NV );
-		ID_VK_ERROR_STRING( VK_RESULT_BEGIN_RANGE );
-		ID_VK_ERROR_STRING( VK_RESULT_RANGE_SIZE );
 		default: return "UNKNOWN";
 	};
 }
@@ -135,50 +133,80 @@ idRenderBackend
 ===========================================================================
 */
 
-static VkDebugReportCallbackEXT debugReportCallback = VK_NULL_HANDLE;
+static VkDebugUtilsMessengerEXT debugUtilsMessenger = VK_NULL_HANDLE;
 
 /*
 =============
-DebugCallback
+DebugUtilsCallback
 =============
 */
-static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback( 
-	VkDebugReportFlagsEXT flags, 
-	VkDebugReportObjectTypeEXT objType, 
-	uint64 obj, size_t location, int32 code,
-	const char * layerPrefix, const char * msg, void * userData ) {
+static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+	VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+	void* pUserData ) {
 
-	idLib::Printf( "VK_DEBUG::%s: %s flags=%d, objType=%d, obj=%llu, location=%lld, code=%d\n", 
-		layerPrefix, msg, flags, objType, obj, location, code );
+	const char* severity = "INFO";
+	if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+		severity = "ERROR";
+	}
+	else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+		severity = "WARNING";
+	}
+
+	idLib::Printf( "VK_DEBUG::%s: [%s] %s\n",
+		severity,
+		pCallbackData->pMessageIdName != NULL ? pCallbackData->pMessageIdName : "unknown",
+		pCallbackData->pMessage );
 
 	return VK_FALSE;
 }
 
 /*
 =============
-CreateDebugReportCallback
+GetDebugUtilsMessengerCreateInfo
 =============
 */
-static void CreateDebugReportCallback( VkInstance instance ) {
-	VkDebugReportCallbackCreateInfoEXT callbackInfo = {};
-	callbackInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
-	callbackInfo.flags = VK_DEBUG_REPORT_DEBUG_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_ERROR_BIT_EXT;
-	callbackInfo.pfnCallback = (PFN_vkDebugReportCallbackEXT) DebugCallback;
-
-	PFN_vkCreateDebugReportCallbackEXT func = (PFN_vkCreateDebugReportCallbackEXT) vkGetInstanceProcAddr( instance, "vkCreateDebugReportCallbackEXT" );
-	ID_VK_VALIDATE( func != NULL, "Could not find vkCreateDebugReportCallbackEXT" );
-	ID_VK_CHECK( func( instance, &callbackInfo, NULL, &debugReportCallback ) );
+static VkDebugUtilsMessengerCreateInfoEXT GetDebugUtilsMessengerCreateInfo() {
+	VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
+	messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+	messengerInfo.messageSeverity =
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+	messengerInfo.messageType =
+		VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	messengerInfo.pfnUserCallback = DebugUtilsCallback;
+	return messengerInfo;
 }
 
 /*
 =============
-DestroyDebugReportCallback
+CreateDebugUtilsMessenger
 =============
 */
-static void DestroyDebugReportCallback( VkInstance instance ) {
-	PFN_vkDestroyDebugReportCallbackEXT func = (PFN_vkDestroyDebugReportCallbackEXT) vkGetInstanceProcAddr( instance, "vkDestroyDebugReportCallbackEXT" );
-	ID_VK_VALIDATE( func != NULL, "Could not find vkDestroyDebugReportCallbackEXT" );
-	func( instance, debugReportCallback, NULL );
+static void CreateDebugUtilsMessenger( VkInstance instance ) {
+	VkDebugUtilsMessengerCreateInfoEXT messengerInfo = GetDebugUtilsMessengerCreateInfo();
+
+	PFN_vkCreateDebugUtilsMessengerEXT func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr( instance, "vkCreateDebugUtilsMessengerEXT" );
+	ID_VK_VALIDATE( func != NULL, "Could not find vkCreateDebugUtilsMessengerEXT" );
+	ID_VK_CHECK( func( instance, &messengerInfo, NULL, &debugUtilsMessenger ) );
+}
+
+/*
+=============
+DestroyDebugUtilsMessenger
+=============
+*/
+static void DestroyDebugUtilsMessenger( VkInstance instance ) {
+	if (debugUtilsMessenger == VK_NULL_HANDLE) {
+		return;
+	}
+	PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr( instance, "vkDestroyDebugUtilsMessengerEXT" );
+	ID_VK_VALIDATE( func != NULL, "Could not find vkDestroyDebugUtilsMessengerEXT" );
+	func( instance, debugUtilsMessenger, NULL );
+	debugUtilsMessenger = VK_NULL_HANDLE;
 }
 
 /*
@@ -343,7 +371,7 @@ void idRenderBackend::CreateInstance() {
 	appInfo.applicationVersion = 1;
 	appInfo.pEngineName = "idTech 4.5";
 	appInfo.engineVersion = 1;
-	appInfo.apiVersion = VK_MAKE_VERSION( 1, 0, VK_HEADER_VERSION );
+	appInfo.apiVersion = VK_API_VERSION_1_3;
 
 	VkInstanceCreateInfo createInfo = {};
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -380,10 +408,17 @@ void idRenderBackend::CreateInstance() {
 	createInfo.enabledLayerCount = m_validationLayers.Num();
 	createInfo.ppEnabledLayerNames = m_validationLayers.Ptr();
 
+	// Chain a messenger create info into instance creation so validation
+	// messages emitted during vkCreateInstance itself are also captured.
+	VkDebugUtilsMessengerCreateInfoEXT instanceMessengerInfo = GetDebugUtilsMessengerCreateInfo();
+	if (enableLayers) {
+		createInfo.pNext = &instanceMessengerInfo;
+	}
+
 	ID_VK_CHECK( vkCreateInstance( &createInfo, NULL, &m_instance ) );
 
-	if ( enableLayers ) {
-		CreateDebugReportCallback( m_instance );
+	if (enableLayers) {
+		CreateDebugUtilsMessenger( m_instance );
 	}
 }
 
@@ -893,21 +928,24 @@ void idRenderBackend::CreateRenderTargets() {
 		createInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
 		createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
+#if defined( ID_USE_AMD_ALLOCATOR )
+		// NOTE: original code created the image twice here (vkCreateImage
+		// followed by vmaCreateImage), leaking the first. vmaCreateImage
+		// creates, allocates, and binds in one call.
+		VmaAllocationCreateInfo allocCreateInfo = {};
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+
+		ID_VK_CHECK( vmaCreateImage( vmaAllocator, &createInfo, &allocCreateInfo, &m_msaaImage, &m_msaaVmaAllocation, &m_msaaAllocation ) );
+#else
 		ID_VK_CHECK( vkCreateImage( vkcontext.device, &createInfo, NULL, &m_msaaImage ) );
 
-#if defined( ID_USE_AMD_ALLOCATOR )
-	VmaMemoryRequirements vmaReq = {};
-	vmaReq.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-	ID_VK_CHECK( vmaCreateImage( vmaAllocator, &createInfo, &vmaReq, &m_msaaImage, &m_msaaVmaAllocation, &m_msaaAllocation ) );
-#else
 		VkMemoryRequirements memoryRequirements = {};
 		vkGetImageMemoryRequirements( vkcontext.device, m_msaaImage, &memoryRequirements );
 
-		m_msaaAllocation = vulkanAllocator.Allocate( 
+		m_msaaAllocation = vulkanAllocator.Allocate(
 			memoryRequirements.size,
 			memoryRequirements.alignment,
-			memoryRequirements.memoryTypeBits, 
+			memoryRequirements.memoryTypeBits,
 			VULKAN_MEMORY_USAGE_GPU_ONLY,
 			VULKAN_ALLOCATION_TYPE_IMAGE_OPTIMAL );
 
@@ -1144,7 +1182,7 @@ void idRenderBackend::Clear() {
 	m_instance = VK_NULL_HANDLE;
 	m_physicalDevice = VK_NULL_HANDLE;
 
-	debugReportCallback = VK_NULL_HANDLE;
+	debugUtilsMessenger = VK_NULL_HANDLE;
 	m_instanceExtensions.Clear();
 	m_deviceExtensions.Clear();
 	m_validationLayers.Clear();
@@ -1218,16 +1256,26 @@ void idRenderBackend::Init() {
 
 	// Setup the allocator
 #if defined( ID_USE_AMD_ALLOCATOR )
-	extern idCVar r_vkHostVisibleMemoryMB;
 	extern idCVar r_vkDeviceLocalMemoryMB;
 
+	// VMA 3.x: static linking against vulkan-1.lib is the default
+	// (VMA_STATIC_VULKAN_FUNCTIONS=1), but passing the two loader entry
+	// points lets VMA fetch everything itself and is the recommended path.
+	VmaVulkanFunctions vulkanFunctions = {};
+	vulkanFunctions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
+	vulkanFunctions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
+
 	VmaAllocatorCreateInfo createInfo = {};
+	createInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+	createInfo.instance = m_instance;
 	createInfo.physicalDevice = m_physicalDevice;
 	createInfo.device = vkcontext.device;
-	createInfo.preferredSmallHeapBlockSize = r_vkHostVisibleMemoryMB.GetInteger() * 1024 * 1024;
+	createInfo.pVulkanFunctions = &vulkanFunctions;
+	// preferredSmallHeapBlockSize was removed in modern VMA; only the
+	// large-heap knob remains.
 	createInfo.preferredLargeHeapBlockSize = r_vkDeviceLocalMemoryMB.GetInteger() * 1024 * 1024;
 
-	vmaCreateAllocator( &createInfo, &vmaAllocator );
+	ID_VK_CHECK( vmaCreateAllocator( &createInfo, &vmaAllocator ) );
 #else
 	vulkanAllocator.Init();
 #endif
@@ -1315,7 +1363,7 @@ void idRenderBackend::Shutdown() {
 
 	// Destroy Debug Callback
 	if ( r_vkEnableValidationLayers.GetBool() ) {
-		DestroyDebugReportCallback( m_instance );
+		DestroyDebugUtilsMessenger( m_instance );
 	}
 
 	// Dump all our memory

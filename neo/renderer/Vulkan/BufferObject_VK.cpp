@@ -92,15 +92,20 @@ bool idVertexBuffer::AllocBufferObject( const void * data, int allocSize, buffer
 	}
 
 #if defined( ID_USE_AMD_ALLOCATOR )
-	VmaMemoryRequirements vmaReq = {};
-	if ( m_usage == BU_STATIC ) {
-		vmaReq.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	} else if ( m_usage == BU_DYNAMIC ) {
-		vmaReq.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		vmaReq.flags = VMA_MEMORY_REQUIREMENT_PERSISTENT_MAP_BIT;
+	VmaAllocationCreateInfo allocCreateInfo = {};
+	if (m_usage == BU_STATIC) {
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+	}
+	else if (m_usage == BU_DYNAMIC) {
+		// VMA 3.x: with the AUTO usage enums, mappable memory requires an
+		// explicit host-access flag. SEQUENTIAL_WRITE matches how the engine
+		// uses these buffers (write-only ring buffers, never read back).
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	}
 
-	ID_VK_CHECK( vmaCreateBuffer( vmaAllocator, &bufferCreateInfo, &vmaReq, &m_apiObject, &m_vmaAllocation, &m_allocation ) );
+	ID_VK_CHECK( vmaCreateBuffer( vmaAllocator, &bufferCreateInfo, &allocCreateInfo, &m_apiObject, &m_vmaAllocation, &m_allocation ) );
 
 #else
 	VkResult ret = vkCreateBuffer( vkcontext.device, &bufferCreateInfo, NULL, &m_apiObject );
@@ -318,15 +323,20 @@ bool idIndexBuffer::AllocBufferObject( const void * data, int allocSize, bufferU
 	}
 
 #if defined( ID_USE_AMD_ALLOCATOR )
-	VmaMemoryRequirements vmaReq = {};
-	if ( m_usage == BU_STATIC ) {
-		vmaReq.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	} else if ( m_usage == BU_DYNAMIC ) {
-		vmaReq.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		vmaReq.flags = VMA_MEMORY_REQUIREMENT_PERSISTENT_MAP_BIT;
+	VmaAllocationCreateInfo allocCreateInfo = {};
+	if (m_usage == BU_STATIC) {
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+	}
+	else if (m_usage == BU_DYNAMIC) {
+		// VMA 3.x: with the AUTO usage enums, mappable memory requires an
+		// explicit host-access flag. SEQUENTIAL_WRITE matches how the engine
+		// uses these buffers (write-only ring buffers, never read back).
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	}
 
-	ID_VK_CHECK( vmaCreateBuffer( vmaAllocator, &bufferCreateInfo, &vmaReq, &m_apiObject, &m_vmaAllocation, &m_allocation ) );
+	ID_VK_CHECK( vmaCreateBuffer( vmaAllocator, &bufferCreateInfo, &allocCreateInfo, &m_apiObject, &m_vmaAllocation, &m_allocation ) );
 
 #else
 	VkResult ret = vkCreateBuffer( vkcontext.device, &bufferCreateInfo, NULL, &m_apiObject );
@@ -545,15 +555,20 @@ bool idUniformBuffer::AllocBufferObject( const void * data, int allocSize, buffe
 	}
 
 #if defined( ID_USE_AMD_ALLOCATOR )
-	VmaMemoryRequirements vmaReq = {};
-	if ( m_usage == BU_STATIC ) {
-		vmaReq.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	} else if ( m_usage == BU_DYNAMIC ) {
-		vmaReq.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		vmaReq.flags = VMA_MEMORY_REQUIREMENT_PERSISTENT_MAP_BIT;
+	VmaAllocationCreateInfo allocCreateInfo = {};
+	if (m_usage == BU_STATIC) {
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+	}
+	else if (m_usage == BU_DYNAMIC) {
+		// VMA 3.x: with the AUTO usage enums, mappable memory requires an
+		// explicit host-access flag. SEQUENTIAL_WRITE matches how the engine
+		// uses these buffers (write-only ring buffers, never read back).
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		allocCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+			VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 	}
 
-	ID_VK_CHECK( vmaCreateBuffer( vmaAllocator, &bufferCreateInfo, &vmaReq, &m_apiObject, &m_vmaAllocation, &m_allocation ) );
+	ID_VK_CHECK( vmaCreateBuffer( vmaAllocator, &bufferCreateInfo, &allocCreateInfo, &m_apiObject, &m_vmaAllocation, &m_allocation ) );
 
 #else
 	VkResult ret = vkCreateBuffer( vkcontext.device, &bufferCreateInfo, NULL, &m_apiObject );

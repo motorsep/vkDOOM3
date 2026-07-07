@@ -336,10 +336,10 @@ void idImage::AllocImage() {
 	imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
 #if defined( ID_USE_AMD_ALLOCATOR )
-	VmaMemoryRequirements vmaReq = {};
-	vmaReq.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	VmaAllocationCreateInfo allocCreateInfo = {};
+	allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-	ID_VK_CHECK( vmaCreateImage( vmaAllocator, &imageCreateInfo, &vmaReq, &m_image, &m_allocation, NULL ) );
+	ID_VK_CHECK( vmaCreateImage( vmaAllocator, &imageCreateInfo, &allocCreateInfo, &m_image, &m_allocation, NULL ) );
 #else
 	ID_VK_CHECK( vkCreateImage( vkcontext.device, &imageCreateInfo, NULL, &m_image ) );
 
