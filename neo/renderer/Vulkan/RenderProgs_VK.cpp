@@ -715,18 +715,22 @@ void idRenderProgManager::Shutdown() {
 	}
 	m_renderProgs.Clear();
 
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
-		m_parmBuffers[ i ]->FreeBufferObject();
-		delete m_parmBuffers[ i ];
-		m_parmBuffers[ i ] = NULL;
+	for (int i = 0; i < NUM_FRAME_DATA; ++i) {
+		if (m_parmBuffers[i] != NULL) {
+			m_parmBuffers[i]->FreeBufferObject();
+			delete m_parmBuffers[i];
+			m_parmBuffers[i] = NULL;
+		}
 	}
 
 	emptyUBO.FreeBufferObject();
 
-	for ( int i = 0; i < NUM_FRAME_DATA; ++i ) {
+	for (int i = 0; i < NUM_FRAME_DATA; ++i) {
 		//vkFreeDescriptorSets( vkcontext.device, m_descriptorPools[ i ], MAX_DESC_SETS, m_descriptorSets[ i ] );
-		vkResetDescriptorPool( vkcontext.device, m_descriptorPools[ i ], 0 );
-		vkDestroyDescriptorPool( vkcontext.device, m_descriptorPools[ i ], NULL );
+		if (m_descriptorPools[i] != VK_NULL_HANDLE) {
+			vkResetDescriptorPool( vkcontext.device, m_descriptorPools[i], 0 );
+			vkDestroyDescriptorPool( vkcontext.device, m_descriptorPools[i], NULL );
+		}
 	}
 
 	memset( m_descriptorSets, 0, sizeof( m_descriptorSets ) );
