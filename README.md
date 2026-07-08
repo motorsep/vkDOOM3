@@ -1,3 +1,42 @@
+# Updates to the original vkDoom 3 as of 07/07/2026
+
+- Fix GL_CopyFrameBuffer — _accum and _currentRender effects
+
+Two bugs, broken since initial release (2017):
+
+1. The blit in GL_CopyFrameBuffer read the swapchain image declaring
+   TRANSFER_SRC_OPTIMAL while it was actually in GENERAL (the render
+   pass finalLayout). Added the missing transitions around the blit;
+   src x/y offsets are now honored as well.
+
+2. renderPassResume reused the main pass attachment descriptions,
+   leaving depth at loadOp=DONT_CARE / initialLayout=UNDEFINED — every
+   mid-frame framebuffer copy discarded the frame's depth and stencil
+   for everything drawn afterward. Depth (and the MSAA color target
+   when multisampling) now LOAD with correct initial layouts; the
+   color attachment's initialLayout corrected from SHADER_READ_ONLY
+   to GENERAL to match the actual image state.
+
+- Fix bloodorb/_accum effects — PlayerView t-coordinate inversion
+
+Third and final layer of the _accum fix. FullscreenFX AccumPass drew the
+capture materials with inverted t-coordinates (t: 1->0) — the GL-era
+compensation for glCopyTexImage2D's bottom-up captures. The Vulkan
+backend captures top-down, so the compensation itself became the bug:
+each accumulation generation landed vertically mirrored before
+recapture, producing a mirrored, non-swirling overlay (the alternating
+mirror shredded the rotation trail).
+
+- Fixed t to normal orientation (0->1) in AccumPass; same fix applied to
+the g_testBloom dev loop. Unconditional edit (game-d3xp doesn't define
+ID_VULKAN); the GL build configuration would need this re-inverted.
+
+Combined with the earlier layout-transition and resume-pass fixes,
+berserk/bloodorb now renders correctly: upright, coherent swirl,
+matching the GL renderer. Broken since initial release.
+
+- Fix screenshot in VK
+
 # Updates to the original vkDoom 3 as of 07/06/2026
 
 Modernize build for VS2022 (v143) and Vulkan SDK 1.4.x
