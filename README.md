@@ -1,3 +1,57 @@
+# Updates to the original vkDoom 3 as of 07/06/2026
+
+Modernize build for VS2022 (v143) and Vulkan SDK 1.4.x
+
+Brings the 2017-era codebase up to current toolchain and Vulkan SDK.
+Renderer targets Vulkan 1.3 API. Builds clean on VS2022 17.x with
+Vulkan SDK 1.4.350.0; boots and renders via the Vulkan backend.
+
+Build system:
+- Retargeted all projects to v143 toolset / Windows 10 SDK
+- Disabled warnings-as-errors for migration (v143 is far stricter
+  than v140; to be revisited with a curated suppression list)
+- Removed stale TypeInfo.h includes in d3xp/gamesys (leftover from
+  original Doom 3; the header never existed in BFG)
+
+Vulkan API modernization (RenderBackend_VK.cpp):
+- apiVersion: VK_MAKE_VERSION(1,0,...) -> VK_API_VERSION_1_3
+- Validation layer: VK_LAYER_LUNARG_standard_validation ->
+  VK_LAYER_KHRONOS_validation
+- VK_EXT_debug_report -> VK_EXT_debug_utils (messenger callback,
+  severity filtering, pNext-chained into instance creation so
+  vkCreateInstance-time messages are captured)
+- Removed VK_RESULT_BEGIN_RANGE / VK_RESULT_RANGE_SIZE from
+  VK_ErrorToString (enums deleted from modern headers)
+
+32-bit Vulkan link library:
+- LunarG removed 32-bit components from the Windows SDK as of
+  1.4.304; this solution is Win32-only. vulkan-1.lib (x86) is now
+  built from KhronosGroup/Vulkan-Loader source (cmake -A Win32)
+  and vendored at neo/libs/vulkan/Lib32/. Linker repointed there.
+- Note: 32-bit VK_LAYER_KHRONOS_validation no longer ships either,
+  so r_vkEnableValidationLayers must stay 0 on modern systems
+  (ValidateValidationLayers fatal-errors otherwise). Use RenderDoc
+  for correctness work.
+
+Shader fix:
+- heatHazeWithMaskAndVertex.vert declared in_Color/in_Color2 at
+  locations 2/3, aliasing in_Normal/in_Tangent. Modern glslang
+  rejects this; old glslang silently accepted it, meaning the
+  shipped SPIR-V read joint indices from normals and skin weights
+  from tangents -- GPU skinning on this effect was broken since
+  release. Corrected to locations 4/5 (matches LAYOUT_DRAW_VERT).
+- All SPIR-V recompiled with SDK 1.4.350 glslangValidator.
+
+Robustness:
+- idRenderProgManager::Shutdown now null-guards m_parmBuffers so
+  asset-load errors during Init produce the intended error dialog
+  instead of a null-deref in the error handler's cleanup path.
+
+Not included (deferred):
+- VMA remains the bundled 2017 header; the build uses the custom
+  allocator path (ID_USE_AMD_ALLOCATOR off). Migration to VMA 3.x
+  is written up but only needed if that path is ever enabled.
+  
 # Archived
 I have not had the time to maintain this to keep pace as a learning tool for Vulkan. There are still some good nuggets in here for beginners and it's a sizable chunk of code utilizing the API. However, it's years behind the API updates so it's not going to inform you on recent best practices. I recommend getting involved with https://github.com/RobertBeckebans/RBDOOM-3-BFG as it supports Vulkan and is actively maintained. 
 
