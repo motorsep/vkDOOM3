@@ -981,7 +981,12 @@ void idRenderBackend::DestroyRenderTargets() {
 
 #else
 	vkDestroyImage( vkcontext.device, m_msaaImage, NULL );
-	vulkanAllocator.Free( m_msaaAllocation );
+	// Only free if it was ever allocated: with r_multiSamples 0 the MSAA
+	// target is never created and m_msaaAllocation is a default struct
+	// with block == NULL, which poisons the garbage ring.
+	if (m_msaaAllocation.block != NULL) {
+		vulkanAllocator.Free( m_msaaAllocation );
+	}
 	m_msaaAllocation = vulkanAllocation_t();
 #endif
 
@@ -1225,6 +1230,7 @@ void idRenderBackend::Clear() {
 	m_screenshotBuffer = VK_NULL_HANDLE;
 	m_screenshotMemory = VK_NULL_HANDLE;
 	m_screenshotFrame = 0;
+	m_swapchainInvalid = false;
 
 	m_commandBuffers.Zero();
 	m_commandBufferFences.Zero();
@@ -1421,13 +1427,11 @@ void idRenderBackend::Restart() {
 	stagingManager.Flush();
 	
 	vkDeviceWaitIdle( vkcontext.device );
-	
-	idImage::EmptyGarbage();
 
 	// Destroy Frame Buffers
 	DestroyFrameBuffers();
 
-	// Destroy Render Targets
+	// Destroy Render Targets (purges go into the garbage ring)
 	DestroyRenderTargets();
 
 	// Destroy Current Swap Chain
@@ -1436,8 +1440,19 @@ void idRenderBackend::Restart() {
 	// Destroy Current Surface
 	vkDestroySurfaceKHR( m_instance, m_surface, NULL );
 
+	// The device is idle: drain EVERY garbage slot, including the targets
+	// purged just above. EmptyGarbage() advances one slot per call; image
+	// frees feed the allocator's own deferred ring, so images drain fully
+	// first, then the allocator. Without this, the old-resolution render
+	// targets are still resident when CreateRenderTargets() allocates the
+	// new ones (fatal on large resolution jumps, e.g. 720p -> 1440p).
+	for (int i = 0; i < NUM_FRAME_DATA; ++i) {
+		idImage::EmptyGarbage();
+	}
 #if !defined( ID_USE_AMD_ALLOCATOR )
-	vulkanAllocator.EmptyGarbage();
+	for (int i = 0; i < NUM_FRAME_DATA; ++i) {
+		vulkanAllocator.EmptyGarbage();
+	}
 #endif
 
 	// Create New Surface
@@ -1661,7 +1676,32 @@ idRenderBackend::GL_StartFrame
 ==================
 */
 void idRenderBackend::GL_StartFrame() {
-	ID_VK_CHECK( vkAcquireNextImageKHR( vkcontext.device, m_swapchain, UINT64_MAX, m_acquireSemaphores[ m_currentFrameData ], VK_NULL_HANDLE, &m_currentSwapIndex ) );
+	// Deferred recreation from a previous frame's SUBOPTIMAL/OUT_OF_DATE
+	// present result (or a SUBOPTIMAL acquire, whose semaphore was consumed
+	// by that frame's submit).
+	if (m_swapchainInvalid) {
+		m_swapchainInvalid = false;
+		Restart();
+	}
+
+	VkResult result = vkAcquireNextImageKHR( vkcontext.device, m_swapchain, UINT64_MAX,
+		m_acquireSemaphores[m_currentFrameData], VK_NULL_HANDLE, &m_currentSwapIndex );
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+		// Semaphore was NOT signaled: safe to recreate and re-acquire now.
+		Restart();
+		result = vkAcquireNextImageKHR( vkcontext.device, m_swapchain, UINT64_MAX,
+			m_acquireSemaphores[m_currentFrameData], VK_NULL_HANDLE, &m_currentSwapIndex );
+	}
+
+	if (result == VK_SUBOPTIMAL_KHR) {
+		// Semaphore WAS signaled and the image is usable: render this frame,
+		// recreate before the next one.
+		m_swapchainInvalid = true;
+		result = VK_SUCCESS;
+	}
+
+	ID_VK_CHECK( result );
 
 	idImage::EmptyGarbage();
 #if !defined( ID_USE_AMD_ALLOCATOR )
@@ -1834,7 +1874,15 @@ void idRenderBackend::GL_EndFrame() {
 	presentInfo.pSwapchains = &m_swapchain; 
 	presentInfo.pImageIndices = &m_currentSwapIndex; 
  
-	ID_VK_CHECK( vkQueuePresentKHR( vkcontext.presentQueue, &presentInfo ) ); 
+	VkResult presentResult = vkQueuePresentKHR( vkcontext.presentQueue, &presentInfo );
+	if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
+		// The frame's semaphores/fences were consumed normally by the submit;
+		// just flag the swapchain for recreation at the next frame start.
+		m_swapchainInvalid = true;
+	}
+	else {
+		ID_VK_CHECK( presentResult );
+	}
  
 	m_counter++; 
 	m_currentFrameData = m_counter % NUM_FRAME_DATA;

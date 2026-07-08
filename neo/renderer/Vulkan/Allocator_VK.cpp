@@ -566,7 +566,11 @@ idVulkanAllocator::Free
 =============
 */
 void idVulkanAllocator::Free( const vulkanAllocation_t allocation ) {
-	m_garbage[ m_garbageIndex ].Append( allocation );
+	if (allocation.block == NULL) {
+		// Never-allocated (default-constructed) allocation; nothing to free.
+		return;
+	}
+	m_garbage[m_garbageIndex].Append( allocation );
 }
 
 /*
@@ -580,16 +584,17 @@ void idVulkanAllocator::EmptyGarbage() {
 	idList< vulkanAllocation_t > & garbage = m_garbage[ m_garbageIndex ];
 	
 	const int numAllocations = garbage.Num();
-	for ( int i = 0; i < numAllocations; ++i ) {
-		vulkanAllocation_t allocation = garbage[ i ];
+	for (int i = 0; i < numAllocations; ++i) {
+		vulkanAllocation_t allocation = garbage[i];
 
 		allocation.block->Free( allocation );
 
-		if ( allocation.block->m_allocated == 0 ) {
-			m_blocks[ allocation.block->m_memoryTypeIndex ].Remove( allocation.block );
-			delete allocation.block;
-			allocation.block = NULL;
-		}
+		// NOTE: deliberately NOT deleting emptied blocks here. Garbage
+		// entries later in this list — or in other ring slots — may still
+		// reference this block; eager deletion was a use-after-free that
+		// corrupted the heap (manifested as vkBindImageMemory failures
+		// during vid_restart). Empty 128MB pools are retained until
+		// Shutdown instead.
 	}
 
 	garbage.Clear();

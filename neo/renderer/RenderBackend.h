@@ -383,6 +383,8 @@ private:
 	VkBuffer			m_screenshotBuffer;
 	VkDeviceMemory		m_screenshotMemory;
 	int					m_screenshotFrame;		// frame-data index whose fence guards the copy
+
+	bool				m_swapchainInvalid;	// present/acquire reported OUT_OF_DATE/SUBOPTIMAL; recreate at next frame start
 };
 
 #endif
