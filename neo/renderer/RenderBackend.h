@@ -183,6 +183,11 @@ public:
 
 	void				Execute( const int numCmds, const idArray< renderCommand_t, 16 > & renderCommands );
 	void				BlockingSwapBuffers();
+	// Screenshot support: arm a capture of the next submitted frame, then
+	// block until its data is available. FinishScreenshotCapture converts to
+	// tightly packed RGB8 with bottom-up rows (glReadPixels convention).
+	void				ArmScreenshotCapture();
+	void				FinishScreenshotCapture( int width, int height, byte* outRGB8 );
 
 	void				Restart();
 
@@ -372,6 +377,12 @@ private:
 	idArray< uint32, NUM_FRAME_DATA >			m_queryIndex;
 	idArray< idArray< uint64, NUM_TIMESTAMP_QUERIES >, NUM_FRAME_DATA >	m_queryResults;
 	idArray< VkQueryPool, NUM_FRAME_DATA >		m_queryPools;
+
+	// Screenshot readback
+	bool				m_screenshotPending;
+	VkBuffer			m_screenshotBuffer;
+	VkDeviceMemory		m_screenshotMemory;
+	int					m_screenshotFrame;		// frame-data index whose fence guards the copy
 };
 
 #endif

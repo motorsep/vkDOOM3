@@ -864,8 +864,13 @@ void FullscreenFX_Helltime::AccumPass( const renderView_t *view ) {
 
 	renderSystem->SetColor4( 1.0f, 1.0f, 1.0f, 1.0f );
 
-	float t0 = 1.0f;
-	float t1 = 0.0f;
+	// GL-era inversion removed: glCopyTexImage2D captured bottom-up, so GL
+	// code drew captured textures with inverted t to compensate. The Vulkan
+	// backend's captures are top-down (normal texture orientation), so the
+	// compensation itself became the bug (vertically mirrored, non-swirling
+	// accumulation overlay).
+	float t0 = 0.0f;
+	float t1 = 1.0f;
 
 	// capture pass
 	if ( clearAccumBuffer ) {

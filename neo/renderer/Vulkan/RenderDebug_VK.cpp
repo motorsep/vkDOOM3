@@ -383,6 +383,20 @@ tiling it into window-sized chunks and rendering each chunk separately
 If ref isn't specified, the full session UpdateScreen will be done.
 ====================
 */
-void idRenderSystemLocal::ReadTiledPixels( int width, int height, byte *buffer, renderView_t *ref ) {
-	// TODO_VK
+void idRenderSystemLocal::ReadTiledPixels( int width, int height, byte* buffer, renderView_t* ref ) {
+	if (ref != NULL) {
+		idLib::Warning( "ReadTiledPixels: ref-based capture (envshot) not implemented for Vulkan" );
+		return;
+	}
+	if (width > GetWidth() || height > GetHeight()) {
+		idLib::Warning( "ReadTiledPixels: tiled oversized capture not implemented for Vulkan (%dx%d > %dx%d)",
+			width, height, GetWidth(), GetHeight() );
+		return;
+	}
+
+	// Arm the backend to copy the next submitted frame into a readback
+	// buffer, drive one frame through the pipeline, then collect.
+	m_backend.ArmScreenshotCapture();
+	common->UpdateScreen();
+	m_backend.FinishScreenshotCapture( width, height, buffer );
 }

@@ -1055,8 +1055,27 @@ void idRenderBackend::CreateRenderPass() {
 
 	ID_VK_CHECK( vkCreateRenderPass( vkcontext.device, &renderPassCreateInfo, NULL, &vkcontext.renderPass ) );
 
+	// Resume pass: everything must LOAD (preserve mid-frame contents) and
+	// initialLayouts must match the actual layouts the images are in at the
+	// point the pass resumes.
+
+	// Color (swapchain): preserved through the copy break; the main pass and
+	// the post-blit barrier leave it in GENERAL.
 	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-	attachments[0].initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	attachments[0].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+	// Depth/stencil: the original code left this at DONT_CARE/UNDEFINED,
+	// which discarded the frame's depth and stencil every time the render
+	// pass was broken for a framebuffer copy. Preserve it.
+	// (stencilLoadOp is already 0 == VK_ATTACHMENT_LOAD_OP_LOAD from memset.)
+	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	// MSAA color target (when multisampling): also preserved across the break.
+	if (resolve) {
+		attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		attachments[2].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+	}
 
 	VkRenderPassCreateInfo renderPassResumeCreateInfo = {};
 	renderPassResumeCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -1201,6 +1220,11 @@ void idRenderBackend::Clear() {
 	m_swapchainImages.Zero();
 	m_swapchainViews.Zero();
 	m_frameBuffers.Zero();
+
+	m_screenshotPending = false;
+	m_screenshotBuffer = VK_NULL_HANDLE;
+	m_screenshotMemory = VK_NULL_HANDLE;
+	m_screenshotFrame = 0;
 
 	m_commandBuffers.Zero();
 	m_commandBufferFences.Zero();
@@ -1463,6 +1487,77 @@ void idRenderBackend::BlockingSwapBuffers() {
 }
 
 /*
+====================
+idRenderBackend::ArmScreenshotCapture
+====================
+*/
+void idRenderBackend::ArmScreenshotCapture() {
+	m_screenshotPending = true;
+}
+
+/*
+====================
+idRenderBackend::FinishScreenshotCapture
+
+Blocks until the captured frame's fence signals, then converts the raw
+swapchain pixels to tightly packed RGB8 with bottom-up rows (matching the
+glReadPixels contract TakeScreenshot expects). Handles BGRA and RGBA
+swapchain formats. width/height select the lower-left crop, matching GL.
+====================
+*/
+void idRenderBackend::FinishScreenshotCapture( int width, int height, byte* outRGB8 ) {
+	if (m_screenshotBuffer == VK_NULL_HANDLE) {
+		idLib::Warning( "FinishScreenshotCapture: no capture was armed/submitted" );
+		return;
+	}
+
+	// The copy was recorded in frame m_screenshotFrame's command buffer;
+	// its fence signals when the GPU has finished everything in it.
+	ID_VK_CHECK( vkWaitForFences( vkcontext.device, 1,
+		&m_commandBufferFences[m_screenshotFrame], VK_TRUE, UINT64_MAX ) );
+
+	void* mapped = NULL;
+	ID_VK_CHECK( vkMapMemory( vkcontext.device, m_screenshotMemory, 0, VK_WHOLE_SIZE, 0, &mapped ) );
+
+	const int swWidth = (int)m_swapchainExtent.width;
+	const int swHeight = (int)m_swapchainExtent.height;
+	const int copyWidth = Min( width, swWidth );
+	const int copyHeight = Min( height, swHeight );
+
+	const bool bgra = (m_swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+		m_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB);
+
+	const byte* src = (const byte*)mapped;
+	for (int row = 0; row < copyHeight; ++row) {
+		// Vulkan image memory is top-down; glReadPixels rows are bottom-up.
+		// GL reads the crop from the bottom-left of the framebuffer; the
+		// bottom copyHeight rows of the Vulkan image are the last rows.
+		const byte* srcRow = src + ((swHeight - 1 - row) * swWidth * 4);
+		byte* dstRow = outRGB8 + (row * copyWidth * 3);
+		for (int col = 0; col < copyWidth; ++col) {
+			const byte* px = srcRow + col * 4;
+			if (bgra) {
+				dstRow[col * 3 + 0] = px[2];
+				dstRow[col * 3 + 1] = px[1];
+				dstRow[col * 3 + 2] = px[0];
+			}
+			else {
+				dstRow[col * 3 + 0] = px[0];
+				dstRow[col * 3 + 1] = px[1];
+				dstRow[col * 3 + 2] = px[2];
+			}
+		}
+	}
+
+	vkUnmapMemory( vkcontext.device, m_screenshotMemory );
+
+	vkDestroyBuffer( vkcontext.device, m_screenshotBuffer, NULL );
+	vkFreeMemory( vkcontext.device, m_screenshotMemory, NULL );
+	m_screenshotBuffer = VK_NULL_HANDLE;
+	m_screenshotMemory = VK_NULL_HANDLE;
+}
+
+/*
 ==================
 idRenderBackend::CheckCVars
 ==================
@@ -1621,6 +1716,71 @@ void idRenderBackend::GL_EndFrame() {
 
 	vkCmdEndRenderPass( commandBuffer );
 
+	if (m_screenshotPending) {
+		m_screenshotPending = false;
+		m_screenshotFrame = m_currentFrameData;
+
+		const VkDeviceSize bufferSize =
+			(VkDeviceSize)m_swapchainExtent.width * m_swapchainExtent.height * 4;
+
+		// Lazy-create the readback buffer (recreated per capture: screenshots
+		// are rare, and this sidesteps resize lifetime management).
+		{
+			VkBufferCreateInfo bufferInfo = {};
+			bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			bufferInfo.size = bufferSize;
+			bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+			bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			ID_VK_CHECK( vkCreateBuffer( vkcontext.device, &bufferInfo, NULL, &m_screenshotBuffer ) );
+
+			VkMemoryRequirements memReq = {};
+			vkGetBufferMemoryRequirements( vkcontext.device, m_screenshotBuffer, &memReq );
+
+			VkMemoryAllocateInfo allocInfo = {};
+			allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			allocInfo.allocationSize = memReq.size;
+			allocInfo.memoryTypeIndex = FindMemoryTypeIndex( memReq.memoryTypeBits, VULKAN_MEMORY_USAGE_GPU_TO_CPU );
+			ID_VK_CHECK( vkAllocateMemory( vkcontext.device, &allocInfo, NULL, &m_screenshotMemory ) );
+			ID_VK_CHECK( vkBindBufferMemory( vkcontext.device, m_screenshotBuffer, m_screenshotMemory, 0 ) );
+		}
+
+		VkImageMemoryBarrier barrier = {};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = m_swapchainImages[m_currentSwapIndex];
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.layerCount = 1;
+
+		// GENERAL -> TRANSFER_SRC for the readback copy
+		barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		vkCmdPipelineBarrier( commandBuffer,
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			0, 0, NULL, 0, NULL, 1, &barrier );
+
+		VkBufferImageCopy copyRegion = {};
+		copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		copyRegion.imageSubresource.layerCount = 1;
+		copyRegion.imageExtent = { m_swapchainExtent.width, m_swapchainExtent.height, 1 };
+
+		vkCmdCopyImageToBuffer( commandBuffer,
+			m_swapchainImages[m_currentSwapIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			m_screenshotBuffer, 1, &copyRegion );
+
+		// TRANSFER_SRC -> GENERAL so the present transition below stays valid
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		vkCmdPipelineBarrier( commandBuffer,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+			0, 0, NULL, 0, NULL, 1, &barrier );
+	}
+
 	// Transition our swap image to present.
 	// Do this instead of having the renderpass do the transition
 	// so we can take advantage of the general layout to avoid 
@@ -1728,8 +1888,8 @@ void idRenderBackend::GL_BindTexture( int index, idImage * image ) {
 idRenderBackend::GL_CopyFrameBuffer
 ====================
 */
-void idRenderBackend::GL_CopyFrameBuffer( idImage * image, int x, int y, int imageWidth, int imageHeight ) {
-	VkCommandBuffer commandBuffer = m_commandBuffers[ m_currentFrameData ];
+void idRenderBackend::GL_CopyFrameBuffer( idImage* image, int x, int y, int imageWidth, int imageHeight ) {
+	VkCommandBuffer commandBuffer = m_commandBuffers[m_currentFrameData];
 
 	vkCmdEndRenderPass( commandBuffer );
 
@@ -1744,17 +1904,37 @@ void idRenderBackend::GL_CopyFrameBuffer( idImage * image, int x, int y, int ima
 	dstBarrier.subresourceRange.baseArrayLayer = 0;
 	dstBarrier.subresourceRange.layerCount = 1;
 
+	VkImageMemoryBarrier srcBarrier = dstBarrier;
+	srcBarrier.image = m_swapchainImages[m_currentSwapIndex];
+
 	// Pre copy transitions
 	{
-		// Transition the color dst image so we can transfer to it.
-		dstBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		// The render pass left the swapchain image in GENERAL; make it a
+		// valid transfer source. (This transition was missing in the
+		// original code — the blit declared TRANSFER_SRC_OPTIMAL against an
+		// image that was actually in GENERAL.)
+		srcBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		srcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		srcBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		srcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		vkCmdPipelineBarrier(
+			commandBuffer,
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			0, 0, NULL, 0, NULL, 1, &srcBarrier );
+
+		// Transition the color dst image so we can transfer to it. The blit
+		// fully overwrites the destination, so we can discard prior contents
+		// with UNDEFINED — this is also the only correct choice the first
+		// time an image is copied to (it has never been in SHADER_READ_ONLY).
+		dstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		dstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		dstBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
 		dstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		vkCmdPipelineBarrier( 
-			commandBuffer, 
-			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-			VK_PIPELINE_STAGE_TRANSFER_BIT, 
+		vkCmdPipelineBarrier(
+			commandBuffer,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
 			0, 0, NULL, 0, NULL, 1, &dstBarrier );
 	}
 
@@ -1765,39 +1945,52 @@ void idRenderBackend::GL_CopyFrameBuffer( idImage * image, int x, int y, int ima
 		region.srcSubresource.baseArrayLayer = 0;
 		region.srcSubresource.mipLevel = 0;
 		region.srcSubresource.layerCount = 1;
-		region.srcOffsets[ 1 ] = { imageWidth, imageHeight, 1 };
+		region.srcOffsets[0] = { x, y, 0 };
+		region.srcOffsets[1] = { x + imageWidth, y + imageHeight, 1 };
 
 		region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		region.dstSubresource.baseArrayLayer = 0;
 		region.dstSubresource.mipLevel = 0;
 		region.dstSubresource.layerCount = 1;
-		region.dstOffsets[ 1 ] = { imageWidth, imageHeight, 1 };
+		region.dstOffsets[1] = { imageWidth, imageHeight, 1 };
 
-		vkCmdBlitImage( 
-			commandBuffer, 
-			m_swapchainImages[ m_currentSwapIndex ], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		vkCmdBlitImage(
+			commandBuffer,
+			m_swapchainImages[m_currentSwapIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			image->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			1, &region, VK_FILTER_NEAREST );
 	}
 
 	// Post copy transitions
 	{
-		// Transition the color dst image so we can transfer to it.
+		// dst image: ready for sampling by the shaders that consume it.
 		dstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		dstBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		dstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 		dstBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		vkCmdPipelineBarrier( 
-			commandBuffer, 
-			VK_PIPELINE_STAGE_TRANSFER_BIT, 
-			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+		vkCmdPipelineBarrier(
+			commandBuffer,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 			0, 0, NULL, 0, NULL, 1, &dstBarrier );
+
+		// swapchain: back to GENERAL, which the resume render pass's
+		// initialLayout now expects (Patch 2.1).
+		srcBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		srcBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		srcBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		srcBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		vkCmdPipelineBarrier(
+			commandBuffer,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+			0, 0, NULL, 0, NULL, 1, &srcBarrier );
 	}
 
 	VkRenderPassBeginInfo renderPassBeginInfo = {};
-	renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;	
+	renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 	renderPassBeginInfo.renderPass = vkcontext.renderPassResume;
-	renderPassBeginInfo.framebuffer = m_frameBuffers[ m_currentSwapIndex ];
+	renderPassBeginInfo.framebuffer = m_frameBuffers[m_currentSwapIndex];
 	renderPassBeginInfo.renderArea.extent = m_swapchainExtent;
 
 	vkCmdBeginRenderPass( commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE );
