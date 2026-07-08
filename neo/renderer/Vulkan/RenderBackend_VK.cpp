@@ -1937,6 +1937,26 @@ idRenderBackend::GL_CopyFrameBuffer
 ====================
 */
 void idRenderBackend::GL_CopyFrameBuffer( idImage* image, int x, int y, int imageWidth, int imageHeight ) {
+
+	// Vulkan images have immutable extent. GL's glCopyTexImage2D implicitly
+	// redefined the destination texture at the copy size on every call, which
+	// silently absorbed resolution changes; do the same explicitly here.
+	// (Re)create the destination when it is missing or its size no longer
+	// matches the copy region (first use, or after vid_restart).
+	if (image->GetImage() == VK_NULL_HANDLE ||
+		image->GetUploadWidth() != imageWidth ||
+		image->GetUploadHeight() != imageHeight) {
+
+		idImageOpts opts;
+		opts.textureType = TT_2D;
+		opts.format = FMT_RGBA8;
+		opts.width = imageWidth;
+		opts.height = imageHeight;
+		opts.numLevels = 1;
+
+		globalImages->ScratchImage( image->GetName(), opts );
+	}
+
 	VkCommandBuffer commandBuffer = m_commandBuffers[m_currentFrameData];
 
 	vkCmdEndRenderPass( commandBuffer );
