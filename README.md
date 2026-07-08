@@ -1,3 +1,23 @@
+# STATUS (2026 modernization):
+* Builds on VS2022 (v143) + Vulkan SDK 1.4.x. 32-bit vulkan-1.lib is
+  vendored (LunarG dropped 32-bit SDK components); validation layers
+  unavailable on x86 — use RenderDoc.
+* FIXED: _accum / _currentRender effects (layout transitions, resume
+  pass depth/stencil loss, GL-era t-coord inversion in PlayerView)
+* FIXED: screenshots implemented (swapchain readback)
+* FIXED: swapchain OUT_OF_DATE/SUBOPTIMAL handling; vid_restart and
+  resolution-change crashes (allocator deferred-free bugs)
+* FIXED: stencil shadow flicker (dynamic state after pipeline bind;
+  slope-scaled shadow bias for float depth — new cvar defaults)
+* FIXED: demand-loaded textures black on first frame (staging flush
+  before frame submit)
+* KNOWN ISSUE: SWF elements glitch during menu tween animations
+  (black/displaced triangles); settled UI is correct. Not stencil
+  masks (audited), not texture latency, not memory coherence, not
+  threading (all tested). Next step for whoever picks it up: RenderDoc
+  capture mid-tween, inspect VS Input of a broken draw.
+* Render debug (r_show*) still largely unimplemented.
+
 # Updates to the original vkDoom 3 as of 07/07/2026
 
 - Fix GL_CopyFrameBuffer — _accum and _currentRender effects
