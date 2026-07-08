@@ -891,15 +891,29 @@ void idRenderBackend::CreateRenderTargets() {
 
 	// Select Depth Format
 	{
-		VkFormat formats[] = {  
-			VK_FORMAT_D32_SFLOAT_S8_UINT, 
-			VK_FORMAT_D24_UNORM_S8_UINT 
+		VkFormat formats[] = {
+			VK_FORMAT_D32_SFLOAT_S8_UINT,
+			VK_FORMAT_D24_UNORM_S8_UINT
 		};
-		vkcontext.depthFormat = ChooseSupportedFormat( 
+		vkcontext.depthFormat = ChooseSupportedFormat(
 			m_physicalDevice,
-			formats, 3, 
-			VK_IMAGE_TILING_OPTIMAL, 
+			formats, 2,
+			VK_IMAGE_TILING_OPTIMAL,
 			VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT );
+
+		// Constant polygon-offset units are calibrated for 24-bit fixed-point
+		// depth (the GL renderer's format). On a float depth buffer they fail
+		// to separate stencil shadow volumes from their generating geometry,
+		// causing per-frame z-fighting flicker in shadows. Use slope-scaled
+		// bias instead. Only override stock defaults so archived user
+		// settings are respected. (CreateRenderTargets also runs on Restart;
+		// the guard makes repeat calls a no-op.)
+		if (vkcontext.depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+			if (r_shadowPolygonFactor.GetFloat() == 0.0f && r_shadowPolygonOffset.GetFloat() == -1.0f) {
+				r_shadowPolygonFactor.SetFloat( 0.25f );
+				r_shadowPolygonOffset.SetFloat( 0.0f );
+			}
+		}
 	}
 
 	idImageOpts depthOptions;
@@ -1333,6 +1347,11 @@ void idRenderBackend::Init() {
 
 	// Init Vertex Cache
 	vertexCache.Init( vkcontext.gpu.props.limits.minUniformBufferOffsetAlignment );
+
+	vkcontext.polyOfsScale = 0.0f;
+	vkcontext.polyOfsBias = 0.0f;
+	vkcontext.depthBoundsZmin = 0.0f;
+	vkcontext.depthBoundsZmax = 1.0f;
 }
 
 /*
@@ -2114,15 +2133,17 @@ idRenderBackend::GL_DepthBoundsTest
 ========================
 */
 void idRenderBackend::GL_DepthBoundsTest( const float zmin, const float zmax ) {
-	if ( !vkcontext.gpu.features.depthBounds || zmin > zmax ) {
+	if (!vkcontext.gpu.features.depthBounds || zmin > zmax) {
 		return;
 	}
 
-	if ( zmin == 0.0f && zmax == 0.0f ) {
+	if (zmin == 0.0f && zmax == 0.0f) {
 		m_glStateBits = m_glStateBits & ~GLS_DEPTH_TEST_MASK;
-	} else {
+	}
+	else {
 		m_glStateBits |= GLS_DEPTH_TEST_MASK;
-		vkCmdSetDepthBounds( m_commandBuffers[ m_currentFrameData ], zmin, zmax );
+		vkcontext.depthBoundsZmin = zmin;
+		vkcontext.depthBoundsZmax = zmax;
 	}
 
 	RENDERLOG_PRINTF( "GL_DepthBoundsTest( zmin=%f, zmax=%f )\n", zmin, zmax );
@@ -2134,7 +2155,10 @@ idRenderBackend::GL_PolygonOffset
 ====================
 */
 void idRenderBackend::GL_PolygonOffset( float scale, float bias ) {
-	vkCmdSetDepthBias( m_commandBuffers[ m_currentFrameData ], bias, 0.0f, scale );
+	// Cache only. Recording vkCmdSetDepthBias here is useless: the next
+	// vkCmdBindPipeline invalidates it. CommitCurrent re-applies after bind.
+	vkcontext.polyOfsScale = scale;
+	vkcontext.polyOfsBias = bias;
 
 	RENDERLOG_PRINTF( "GL_PolygonOffset( scale=%f, bias=%f )\n", scale, bias );
 }

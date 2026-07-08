@@ -908,6 +908,18 @@ void idRenderProgManager::CommitCurrent( uint64 stateBits, VkCommandBuffer comma
 
 	vkCmdBindDescriptorSets( commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, prog.pipelineLayout, 0, 1, &descSet, 0, NULL );
 	vkCmdBindPipeline( commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline );
+
+	// Dynamic state must be recorded AFTER the pipeline bind: binding any
+	// pipeline that has these states static (most of them) invalidates
+	// previously set dynamic values. Setting them before the bind — as the
+	// GL_* functions used to — is undefined behavior that legacy drivers
+	// happened to tolerate; on current drivers it flickers stencil shadows.
+	if (stateBits & GLS_POLYGON_OFFSET) {
+		vkCmdSetDepthBias( commandBuffer, vkcontext.polyOfsBias, 0.0f, vkcontext.polyOfsScale );
+	}
+	if (vkcontext.gpu.features.depthBounds && (stateBits & GLS_DEPTH_TEST_MASK)) {
+		vkCmdSetDepthBounds( commandBuffer, vkcontext.depthBoundsZmin, vkcontext.depthBoundsZmax );
+	}
 }
 
 /*

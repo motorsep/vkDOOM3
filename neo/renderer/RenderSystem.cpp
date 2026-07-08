@@ -114,8 +114,8 @@ idCVar r_clear( "r_clear", "2", CVAR_RENDERER, "force screen clear every frame, 
 idCVar r_offsetFactor( "r_offsetfactor", "0", CVAR_RENDERER | CVAR_FLOAT, "polygon offset parameter" );
 idCVar r_offsetUnits( "r_offsetunits", "-600", CVAR_RENDERER | CVAR_FLOAT, "polygon offset parameter" );
 
-idCVar r_shadowPolygonOffset( "r_shadowPolygonOffset", "-1", CVAR_RENDERER | CVAR_FLOAT, "bias value added to depth test for stencil shadow drawing" );
-idCVar r_shadowPolygonFactor( "r_shadowPolygonFactor", "0", CVAR_RENDERER | CVAR_FLOAT, "scale value for stencil shadow drawing" );
+idCVar r_shadowPolygonOffset( "r_shadowPolygonOffset", "0", CVAR_RENDERER | CVAR_FLOAT, "bias value added to depth test for stencil shadow drawing; -1 for OpenGL;0 for VK" );
+idCVar r_shadowPolygonFactor( "r_shadowPolygonFactor", "0.25", CVAR_RENDERER | CVAR_FLOAT, "scale value for stencil shadow drawing; 0 for OpenGL; 0.25 for VK" );
 idCVar r_subviewOnly( "r_subviewOnly", "0", CVAR_RENDERER | CVAR_BOOL, "1 = don't render main view, allowing subviews to be debugged" );
 idCVar r_testGamma( "r_testGamma", "0", CVAR_RENDERER | CVAR_FLOAT, "if > 0 draw a grid pattern to test gamma levels", 0, 195 );
 idCVar r_testGammaBias( "r_testGammaBias", "0", CVAR_RENDERER | CVAR_FLOAT, "if > 0 draw a grid pattern to test gamma levels" );

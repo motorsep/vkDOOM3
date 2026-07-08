@@ -160,6 +160,15 @@ struct vulkanContext_t {
 	bool							supersampling;
 
 	idArray< idImage *, MAX_IMAGE_PARMS > imageParms;
+
+	// Cached dynamic state, re-applied after every pipeline bind in
+	// CommitCurrent (recording vkCmdSetDepthBias/Bounds before the bind
+	// is undefined per spec; legacy drivers latched it, current drivers
+	// flicker stencil shadows).
+	float							polyOfsScale;
+	float							polyOfsBias;
+	float							depthBoundsZmin;
+	float							depthBoundsZmax;
 };
 
 extern vulkanContext_t vkcontext;
