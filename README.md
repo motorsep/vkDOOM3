@@ -37,6 +37,34 @@ matching the GL renderer. Broken since initial release.
 
 - Fix screenshot in VK
 
+- Fix allocator crashes on vid_restart / resolution change + Swapchain invalidation handling
+
+Three compounding issues in the custom allocator's deferred-free path,
+exposed by mode changes through the menu (vid_restart):
+
+1. DestroyRenderTargets unconditionally freed m_msaaAllocation; with
+   r_multiSamples 0 that allocation is default-constructed with
+   block == NULL, poisoning the garbage ring (null this in
+   idVulkanBlock::Free). Now guarded at both the producer
+   (DestroyRenderTargets) and the sink (idVulkanAllocator::Free).
+
+2. EmptyGarbage deleted blocks that became empty mid-drain while
+   later garbage entries — same list or other ring slots — still
+   referenced them. Use-after-free heap corruption that surfaced
+   downstream as vkBindImageMemory VALIDATION_FAILED during Restart.
+   Empty blocks are now retained until Shutdown instead of eagerly
+   deleted.
+
+3. Restart() drained only one garbage ring slot before recreating
+   render targets, leaving old-resolution allocations resident during
+   reallocation. Now drains all NUM_FRAME_DATA slots for both the
+   image and allocator rings after vkDeviceWaitIdle, where deferred
+   freeing serves no purpose.
+
+Verified: vid_restart at same resolution, 720p <-> 1080p <-> 1440p
+fullscreen transitions, windowed <-> fullscreen cycling, mode revert,
+with r_multiSamples 0 and 4.
+
 # Updates to the original vkDoom 3 as of 07/06/2026
 
 Modernize build for VS2022 (v143) and Vulkan SDK 1.4.x
